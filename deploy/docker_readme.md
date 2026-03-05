@@ -64,6 +64,7 @@ docker run -d -p 8088:8088 -v copaw-data:/app/working copaw-auth
 
 持久化的数据包括：
 - 模型配置 (`providers.json`) - API keys、活跃模型等
+- 环境变量 (`envs.json`) - 通过控制台设置的环境变量
 - 应用配置 (`config.json`)
 - 对话历史
 - 技能文件
