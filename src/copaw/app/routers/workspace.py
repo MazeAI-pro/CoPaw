@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from ...constant import WORKING_DIR
 
@@ -186,3 +186,59 @@ async def upload_workspace(  # pylint: disable=too-many-branches
     finally:
         if tmp_dir and tmp_dir.is_dir():
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.get(
+    "/file/{file_path:path}",
+    summary="Download a single file from workspace",
+    description=(
+        "Download a single file from WORKING_DIR. "
+        "Only files within WORKING_DIR are accessible for security."
+    ),
+    responses={
+        200: {
+            "content": {"application/octet-stream": {}},
+            "description": "File content",
+        },
+        403: {"description": "Access denied - path outside workspace"},
+        404: {"description": "File not found"},
+    },
+)
+async def download_file(file_path: str):
+    """Download a single file from the workspace.
+
+    Args:
+        file_path: Relative path to the file within WORKING_DIR
+
+    Returns:
+        FileResponse with the file content
+    """
+    # Resolve the full path
+    full_path = (WORKING_DIR / file_path).resolve()
+
+    # Security check: ensure the path is within WORKING_DIR
+    if not str(full_path).startswith(str(WORKING_DIR)):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: path is outside the workspace",
+        )
+
+    # Check if file exists and is a file
+    if not full_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {file_path}",
+        )
+
+    if not full_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Path is not a file: {file_path}",
+        )
+
+    # Return the file with appropriate headers
+    return FileResponse(
+        path=full_path,
+        filename=full_path.name,
+        media_type="application/octet-stream",
+    )

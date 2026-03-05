@@ -3,6 +3,7 @@
 # pylint: disable=line-too-long,too-many-return-statements
 import os
 import mimetypes
+from pathlib import Path
 
 from agentscope.tool import ToolResponse
 from agentscope.message import (
@@ -12,6 +13,7 @@ from agentscope.message import (
     VideoBlock,
 )
 
+from ...constant import WORKING_DIR
 from ..schema import FileBlock
 
 
@@ -74,9 +76,18 @@ async def send_file_to_user(
                     content=[TextBlock(type="text", text=file.read())],
                 )
 
-        # Use local file URL instead of base64
+        # Generate URL: use HTTP URL for files in WORKING_DIR, otherwise file://
         absolute_path = os.path.abspath(file_path)
-        file_url = f"file://{absolute_path}"
+        resolved_path = Path(absolute_path).resolve()
+
+        # Check if file is within WORKING_DIR
+        if str(resolved_path).startswith(str(WORKING_DIR)):
+            # Generate HTTP URL for cloud deployment
+            relative_path = resolved_path.relative_to(WORKING_DIR)
+            file_url = f"/api/workspace/file/{relative_path.as_posix()}"
+        else:
+            # Use file:// URL for local files outside WORKING_DIR
+            file_url = f"file://{absolute_path}"
         source = {"type": "url", "url": file_url}
 
         if as_type == "image":
