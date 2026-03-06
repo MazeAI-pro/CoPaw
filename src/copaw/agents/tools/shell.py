@@ -13,7 +13,7 @@ from typing import Optional
 from agentscope.tool import ToolResponse
 from agentscope.message import TextBlock
 
-from copaw.constant import WORKING_DIR
+from copaw.constant import WORKING_DIR, USER_FILES_DIR
 
 
 def _execute_subprocess_sync(
@@ -85,7 +85,7 @@ async def execute_shell_command(
             Default is 60 seconds.
         cwd (`Optional[Path]`, defaults to `None`):
             The working directory for the command execution.
-            If None, defaults to WORKING_DIR.
+            If None, defaults to USER_FILES_DIR.
 
     Returns:
         `ToolResponse`:
@@ -97,7 +97,11 @@ async def execute_shell_command(
     cmd = (command or "").strip()
 
     # Set working directory
-    working_dir = cwd if cwd is not None else WORKING_DIR
+    if cwd is not None:
+        working_dir = cwd
+    else:
+        USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
+        working_dir = USER_FILES_DIR
 
     try:
         if sys.platform == "win32":

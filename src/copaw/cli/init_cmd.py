@@ -23,7 +23,7 @@ from ..config.config import (
     Config,
     HeartbeatConfig,
 )
-from ..constant import HEARTBEAT_DEFAULT_EVERY
+from ..constant import HEARTBEAT_DEFAULT_EVERY, USER_FILES_DIR
 from ..providers import load_providers_json
 
 SECURITY_WARNING = """
@@ -132,6 +132,9 @@ def init_cmd(force: bool, use_defaults: bool, accept_security: bool) -> None:
             )
             raise click.Abort()
     working_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create user_files directory for user-generated files
+    USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
     # --- config.json ---
     write_config = True

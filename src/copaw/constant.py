@@ -71,6 +71,9 @@ CUSTOM_CHANNELS_DIR = WORKING_DIR / "custom_channels"
 # Local models directory
 MODELS_DIR = WORKING_DIR / "models"
 
+# User files directory - all user-generated files go here
+USER_FILES_DIR = WORKING_DIR / "user_files"
+
 # Memory compaction configuration
 MEMORY_COMPACT_KEEP_RECENT = int(
     os.environ.get("COPAW_MEMORY_COMPACT_KEEP_RECENT", "3"),

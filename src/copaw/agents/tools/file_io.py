@@ -8,12 +8,12 @@ from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from ...constant import WORKING_DIR
+from ...constant import WORKING_DIR, USER_FILES_DIR
 
 
 def _resolve_file_path(file_path: str) -> str:
     """Resolve file path: use absolute path as-is,
-    resolve relative path from WORKING_DIR.
+    resolve relative path from USER_FILES_DIR.
 
     Args:
         file_path: The input file path (absolute or relative).
@@ -25,7 +25,8 @@ def _resolve_file_path(file_path: str) -> str:
     if path.is_absolute():
         return str(path)
     else:
-        return str(WORKING_DIR / file_path)
+        USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
+        return str(USER_FILES_DIR / file_path)
 
 
 async def read_file(  # pylint: disable=too-many-return-statements
@@ -33,7 +34,7 @@ async def read_file(  # pylint: disable=too-many-return-statements
     start_line: Optional[int] = None,
     end_line: Optional[int] = None,
 ) -> ToolResponse:
-    """Read a file. Relative paths resolve from WORKING_DIR.
+    """Read a file. Relative paths resolve from USER_FILES_DIR.
 
     Use start_line/end_line to read a specific line range (output includes
     line numbers). Omit both to read the full file.
@@ -143,7 +144,7 @@ async def write_file(
     file_path: str,
     content: str,
 ) -> ToolResponse:
-    """Create or overwrite a file. Relative paths resolve from WORKING_DIR.
+    """Create or overwrite a file. Relative paths resolve from USER_FILES_DIR.
 
     Args:
         file_path (`str`):
@@ -192,7 +193,7 @@ async def edit_file(
     new_text: str,
 ) -> ToolResponse:
     """Find-and-replace text in a file. All occurrences of old_text are
-    replaced with new_text. Relative paths resolve from WORKING_DIR.
+    replaced with new_text. Relative paths resolve from USER_FILES_DIR.
 
     Args:
         file_path (`str`):
@@ -252,7 +253,7 @@ async def append_file(
     content: str,
 ) -> ToolResponse:
     """Append content to the end of a file. Relative paths resolve from
-    WORKING_DIR.
+    USER_FILES_DIR.
 
     Args:
         file_path (`str`):

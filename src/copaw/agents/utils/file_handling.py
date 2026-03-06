@@ -17,6 +17,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from ...constant import USER_FILES_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,7 +148,7 @@ def _guess_suffix_from_file_content(path: Path) -> Optional[str]:
 async def download_file_from_base64(
     base64_data: str,
     filename: Optional[str] = None,
-    download_dir: str = "downloads",
+    download_dir: Optional[str] = None,
 ) -> str:
     """
     Save base64-encoded file data to local download directory.
@@ -154,13 +156,18 @@ async def download_file_from_base64(
     Args:
         base64_data: Base64-encoded file content.
         filename: The filename to save. If not provided, will generate one.
-        download_dir: The directory to save files. Defaults to "downloads".
+        download_dir: The directory to save files. If not provided, defaults
+            to USER_FILES_DIR.
 
     Returns:
         The local file path.
     """
     try:
         file_content = base64.b64decode(base64_data)
+
+        if download_dir is None:
+            download_dir = str(USER_FILES_DIR)
+            USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
         download_path = Path(download_dir)
         download_path.mkdir(parents=True, exist_ok=True)
@@ -184,7 +191,7 @@ async def download_file_from_base64(
 async def download_file_from_url(
     url: str,
     filename: Optional[str] = None,
-    download_dir: str = "downloads",
+    download_dir: Optional[str] = None,
 ) -> str:
     """
     Download a file from URL to local download directory using wget or curl.
@@ -195,8 +202,9 @@ async def download_file_from_url(
         filename (`str`, optional):
             The filename to save. If not provided, will extract from URL or
             generate a hash-based name.
-        download_dir (`str`):
-            The directory to save files. Defaults to "downloads".
+        download_dir (`str`, optional):
+            The directory to save files. If not provided, defaults to
+            USER_FILES_DIR.
 
     Returns:
         `str`:
@@ -207,6 +215,10 @@ async def download_file_from_url(
         local = _resolve_local_path(url, parsed)
         if local is not None:
             return local
+
+        if download_dir is None:
+            download_dir = str(USER_FILES_DIR)
+            USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
         download_path = Path(download_dir)
         download_path.mkdir(parents=True, exist_ok=True)
