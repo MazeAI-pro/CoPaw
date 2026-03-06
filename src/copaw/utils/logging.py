@@ -5,6 +5,7 @@ import logging.handlers
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 
 # Rotating file handler limits (idempotent add avoids duplicate handlers)
@@ -104,6 +105,9 @@ def setup_logger(level: int | str = logging.INFO):
     """Configure logging to only output from this package (copaw), not deps."""
     log_format = "%(asctime)s | %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
+
+    # Use Beijing time (UTC+8) for all log timestamps globally
+    logging.Formatter.converter = staticmethod(lambda ts, *_: time.gmtime(ts + 8 * 3600))
 
     if isinstance(level, str):
         level = _LEVEL_MAP.get(level.lower(), logging.INFO)

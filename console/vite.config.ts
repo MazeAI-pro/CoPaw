@@ -33,6 +33,10 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "0.0.0.0",
       port: 5173,
+      proxy: {
+        "/api": "http://localhost:8088",
+        "/ws": { target: "ws://localhost:8088", ws: true },
+      },
     },
     optimizeDeps: {
       include: ["diff"],
