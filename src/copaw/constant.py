@@ -96,4 +96,18 @@ CORS_ORIGINS = os.environ.get("COPAW_CORS_ORIGINS", "").strip()
 # Base URL for cloud deployment (e.g., "https://your-domain.com")
 # Used to generate full URLs for file downloads and HTML links.
 # When unset, relative URLs are used (suitable for local deployment).
+#
+# NOTE: This module-level constant is evaluated at import time, which is
+# BEFORE load_envs_into_environ() runs. Use get_copaw_base_url() instead
+# for runtime access that picks up Console-configured env vars.
 COPAW_BASE_URL = os.environ.get("COPAW_BASE_URL", "").rstrip("/")
+
+
+def get_copaw_base_url() -> str:
+    """Return COPAW_BASE_URL, reading os.environ at call time.
+
+    This avoids the import-time caching issue where Console-configured
+    environment variables (loaded from envs.json) are not yet available
+    when constant.py is first imported.
+    """
+    return os.environ.get("COPAW_BASE_URL", "").rstrip("/")

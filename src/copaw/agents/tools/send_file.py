@@ -13,7 +13,7 @@ from agentscope.message import (
     VideoBlock,
 )
 
-from ...constant import WORKING_DIR, COPAW_BASE_URL
+from ...constant import WORKING_DIR, get_copaw_base_url
 from ..schema import FileBlock
 
 
@@ -85,9 +85,11 @@ async def send_file_to_user(
             # Generate HTTP URL for cloud deployment
             relative_path = resolved_path.relative_to(WORKING_DIR)
             relative_url = f"/api/workspace/file/{relative_path.as_posix()}"
-            # Use full URL if COPAW_BASE_URL is set
+            # Use full URL if COPAW_BASE_URL is set (read at call time
+            # to pick up Console-configured env vars)
+            base_url = get_copaw_base_url()
             file_url = (
-                f"{COPAW_BASE_URL}{relative_url}" if COPAW_BASE_URL else relative_url
+                f"{base_url}{relative_url}" if base_url else relative_url
             )
         else:
             # Use file:// URL for local files outside WORKING_DIR
