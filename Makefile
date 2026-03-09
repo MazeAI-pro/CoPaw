@@ -6,12 +6,14 @@
 #   CONTAINER  - Container name (default: copaw)
 #   PORT       - Host port mapping (default: 8088)
 #   VOLUME     - Data volume name (default: copaw-data)
+#   SECRET_VOL - Secret volume name for providers.json and envs.json (default: copaw-secret)
 #   DOCKERFILE - Dockerfile path (default: deploy/Dockerfile.auth)
 
 IMAGE      ?= copaw-auth
 CONTAINER  ?= copaw
 PORT       ?= 8088
 VOLUME     ?= copaw-data
+SECRET_VOL ?= copaw-secret
 DOCKERFILE ?= deploy/Dockerfile.auth
 
 .PHONY: build run stop restart logs ps shell clean update help
@@ -36,6 +38,7 @@ run:
 		--name $(CONTAINER) \
 		-p $(PORT):8088 \
 		-v $(VOLUME):/app/working \
+		-v $(SECRET_VOL):/app/working.secret \
 		$(IMAGE)
 	@echo "Container started on port $(PORT)"
 	@echo "View logs: make logs"
@@ -68,6 +71,8 @@ clean: stop
 	-docker rmi $(IMAGE) 2>/dev/null || true
 	@echo "Removing volume: $(VOLUME)"
 	-docker volume rm $(VOLUME) 2>/dev/null || true
+	@echo "Removing secret volume: $(SECRET_VOL)"
+	-docker volume rm $(SECRET_VOL) 2>/dev/null || true
 	@echo "Cleanup complete"
 
 ## ----------------------------------------------------------------------------
@@ -90,6 +95,7 @@ update:
 		--name $(CONTAINER) \
 		-p $(PORT):8088 \
 		-v $(VOLUME):/app/working \
+		-v $(SECRET_VOL):/app/working.secret \
 		$(IMAGE)
 	@echo "Container started on port $(PORT)"
 	@echo "Update complete!"
@@ -111,6 +117,7 @@ help:
 	@echo "  CONTAINER  = $(CONTAINER)"
 	@echo "  PORT       = $(PORT)"
 	@echo "  VOLUME     = $(VOLUME)"
+	@echo "  SECRET_VOL = $(SECRET_VOL)"
 	@echo "  DOCKERFILE = $(DOCKERFILE)"
 	@echo ""
 	@echo "Examples:"
