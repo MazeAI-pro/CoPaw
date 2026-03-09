@@ -287,11 +287,17 @@ async def download_file(file_path: str):
     # Get appropriate media type and inline preference
     media_type, inline = _get_media_type(full_path)
 
+    # Common headers: prevent caching to ensure fresh content for shared files
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+    }
+
     if inline:
         # Inline display - no filename header means Content-Disposition: inline
         return FileResponse(
             path=full_path,
             media_type=media_type,
+            headers=headers,
         )
     else:
         # Download - set filename to trigger attachment
@@ -299,4 +305,5 @@ async def download_file(file_path: str):
             path=full_path,
             filename=full_path.name,
             media_type=media_type,
+            headers=headers,
         )
