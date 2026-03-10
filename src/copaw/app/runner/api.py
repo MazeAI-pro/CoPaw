@@ -15,7 +15,7 @@ from .models import (
     ChatHistory,
 )
 from .utils import agentscope_msg_to_message
-from ..user_scope import get_current_user_id
+from ..user_scope import get_user_id_from_request
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -39,7 +39,7 @@ def get_chat_manager(request: Request) -> ChatManager:
             status_code=503,
             detail="Chat manager not initialized",
         )
-    return runner.get_chat_manager_for_user(get_current_user_id(request))
+    return runner.get_chat_manager_for_user(get_user_id_from_request(request))
 
 
 def get_session(request: Request) -> JSONSession:
@@ -60,7 +60,7 @@ def get_session(request: Request) -> JSONSession:
             status_code=503,
             detail="Session not initialized",
         )
-    return runner.get_session_for_user(get_current_user_id(request))
+    return runner.get_session_for_user(get_user_id_from_request(request))
 
 
 @router.get("", response_model=list[ChatSpec])
@@ -96,7 +96,7 @@ async def create_chat(
     Returns:
         Created chat spec with UUID
     """
-    current_user_id = get_current_user_id(raw_request)
+    current_user_id = get_user_id_from_request(raw_request)
     chat_id = str(uuid4())
     spec = ChatSpec(
         id=chat_id,

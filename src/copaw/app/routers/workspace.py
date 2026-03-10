@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse, FileResponse
 
-from ..user_scope import get_current_user_id, get_user_workspace_dir
+from ..user_scope import get_user_id_from_request, get_user_workspace_dir
 
 # Initialize mimetypes
 mimetypes.init()
@@ -133,9 +133,9 @@ def _validate_zip_data(data: bytes, root: Path) -> None:
         },
     },
 )
-async def download_workspace():
+async def download_workspace(request: Request):
     """Stream current user's workspace directory as a zip file."""
-    workspace_root = get_user_workspace_dir(get_current_user_id())
+    workspace_root = get_user_workspace_dir(get_user_id_from_request(request))
     if not workspace_root.is_dir():
         raise HTTPException(
             status_code=404,
@@ -191,7 +191,7 @@ async def upload_workspace(  # pylint: disable=too-many-branches
             ),
         )
 
-    workspace_root = get_user_workspace_dir(get_current_user_id(request))
+    workspace_root = get_user_workspace_dir(get_user_id_from_request(request))
     data = await file.read()
     _validate_zip_data(data, workspace_root)
 
@@ -264,7 +264,7 @@ async def download_file(file_path: str, request: Request):
         Previewable files (HTML, PDF, images, text) are displayed inline;
         others trigger a download.
     """
-    workspace_root = get_user_workspace_dir(get_current_user_id(request))
+    workspace_root = get_user_workspace_dir(get_user_id_from_request(request))
     # Resolve the full path
     full_path = (workspace_root / file_path).resolve()
 

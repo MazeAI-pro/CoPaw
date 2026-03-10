@@ -213,14 +213,14 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
 
   private createEmptySession(sessionId: string): ExtendedSession {
     window.currentSessionId = sessionId;
-    window.currentUserId = "default";
+    window.currentUserId = window.currentUserId || "default";
     window.currentChannel = "console";
 
     return {
       id: sessionId,
       name: "New Chat",
       sessionId: sessionId,
-      userId: "default",
+      userId: window.currentUserId || "default",
       channel: "console",
       messages: [],
       meta: {},
@@ -341,7 +341,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
       id: sessionId,
       name: chatSpec?.name || sessionId,
       sessionId: chatSpec?.sessionId || sessionId,
-      userId: chatSpec?.userId || "default",
+      userId: chatSpec?.userId || window.currentUserId || "default",
       channel: chatSpec?.channel || "console",
       messages: convertMessages(chatHistory.messages || []),
       meta: chatSpec?.meta || {},
@@ -377,7 +377,7 @@ class SessionApi implements IAgentScopeRuntimeWebUISessionAPI {
     const extendedSession = {
       ...session,
       sessionId: session.id,
-      userId: "default",
+      userId: window.currentUserId || "default",
       channel: "console",
     } as ExtendedSession;
 

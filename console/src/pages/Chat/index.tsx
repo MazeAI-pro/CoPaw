@@ -11,7 +11,8 @@ import sessionApi from "./sessionApi";
 import { useLocalStorageState } from "ahooks";
 import defaultConfig, { DefaultConfig } from "./OptionsPanel/defaultConfig";
 import Weather from "./Weather";
-import { getApiUrl, getApiToken } from "../../api/config";
+import { getApiUrl } from "../../api/config";
+import { getAuthToken } from "../../api/request";
 import { providerApi } from "../../api/modules/provider";
 import "./index.module.less";
 
@@ -102,7 +103,7 @@ export default function ChatPage() {
         "Content-Type": "application/json",
       };
 
-      const token = getApiToken();
+      const token = await getAuthToken();
       if (token) {
         (headers as Record<string, string>).Authorization = `Bearer ${token}`;
       }

@@ -1,6 +1,31 @@
 import { getApiUrl, getApiToken } from "./config";
 
-function buildHeaders(method?: string, extra?: HeadersInit): Headers {
+type TokenGetter = () => Promise<string | null> | string | null;
+type UnauthorizedHandler = () => void;
+
+let tokenGetter: TokenGetter | null = null;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+export function setTokenGetter(getter: TokenGetter | null): void {
+  tokenGetter = getter;
+}
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
+export async function getAuthToken(): Promise<string | null> {
+  if (tokenGetter) {
+    const token = await tokenGetter();
+    if (token) {
+      return token;
+    }
+  }
+  const staticToken = getApiToken();
+  return staticToken || null;
+}
+
+async function buildHeaders(method?: string, extra?: HeadersInit): Promise<Headers> {
   // Normalize extra to a Headers instance for consistent handling
   const headers = extra instanceof Headers ? extra : new Headers(extra);
 
@@ -13,7 +38,7 @@ function buildHeaders(method?: string, extra?: HeadersInit): Headers {
   }
 
   // Add authorization token if available
-  const token = getApiToken();
+  const token = await getAuthToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -27,7 +52,7 @@ export async function request<T = unknown>(
 ): Promise<T> {
   const url = getApiUrl(path);
   const method = options.method || "GET";
-  const headers = buildHeaders(method, options.headers);
+  const headers = await buildHeaders(method, options.headers);
 
   const response = await fetch(url, {
     ...options,
@@ -35,6 +60,9 @@ export async function request<T = unknown>(
   });
 
   if (!response.ok) {
+    if (response.status === 401 && unauthorizedHandler) {
+      unauthorizedHandler();
+    }
     const text = await response.text().catch(() => "");
     throw new Error(
       `Request failed: ${response.status} ${response.statusText}${

@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Simple authentication module for CoPaw console.
+"""Authentication module for CoPaw console."""
+from __future__ import annotations
 
-This module provides a basic login protection for the CoPaw console when
-deployed on a public server. It uses session-based authentication with
-hardcoded credentials that can be overridden via environment variables.
-"""
 import json
 import logging
 import os
@@ -14,16 +11,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from jose import JWTError, jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from copaw.constant import WORKING_DIR
+from .user_scope import DEFAULT_USER_ID, normalize_user_id
 
 logger = logging.getLogger(__name__)
 
 # Default credentials (hardcoded, can be overridden via env vars)
-# These are randomly generated complex credentials
 DEFAULT_USERNAME = "copaw_admin"
 DEFAULT_PASSWORD = "Xk9#mP2$vL7@nQ4wR8tY"
 
@@ -36,6 +34,9 @@ class AuthConfig:
     username: str = DEFAULT_USERNAME
     password: str = DEFAULT_PASSWORD
     session_expire_hours: int = 24
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_jwt_secret: str = ""
 
     def __post_init__(self) -> None:
         """Load configuration from environment variables."""
@@ -57,6 +58,13 @@ class AuthConfig:
         if env_expire and env_expire.isdigit():
             self.session_expire_hours = int(env_expire)
 
+        self.supabase_url = os.environ.get("COPAW_SUPABASE_URL", "").strip()
+        self.supabase_anon_key = os.environ.get("COPAW_SUPABASE_ANON_KEY", "").strip()
+        self.supabase_jwt_secret = os.environ.get(
+            "COPAW_SUPABASE_JWT_SECRET",
+            "",
+        ).strip()
+
 
 @dataclass
 class Session:
@@ -74,19 +82,15 @@ class SessionManager:
     sessions: dict[str, Session] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Load sessions from file on initialization."""
         self._load()
 
     def _get_sessions_file(self) -> Path:
-        """Get the path to the sessions file."""
         return WORKING_DIR / "sessions.json"
 
     def _load(self) -> None:
-        """Load sessions from file."""
         sessions_file = self._get_sessions_file()
         if not sessions_file.exists():
             return
-
         try:
             with open(sessions_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -94,18 +98,13 @@ class SessionManager:
                 token: Session(**session_data)
                 for token, session_data in data.items()
             }
-            logger.debug(f"Loaded {len(self.sessions)} sessions from {sessions_file}")
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to load sessions file: {e}")
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.warning("Failed to load sessions file: %s", exc)
             self.sessions = {}
 
     def _save(self) -> None:
-        """Save sessions to file."""
         sessions_file = self._get_sessions_file()
-
-        # Ensure parent directory exists
         sessions_file.parent.mkdir(parents=True, exist_ok=True)
-
         try:
             data = {
                 token: {
@@ -117,12 +116,10 @@ class SessionManager:
             }
             with open(sessions_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            logger.debug(f"Saved {len(self.sessions)} sessions to {sessions_file}")
-        except Exception as e:
-            logger.error(f"Failed to save sessions file: {e}")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Failed to save sessions file: %s", exc)
 
     def create_session(self, username: str, expire_hours: int) -> str:
-        """Create a new session and return the token."""
         token = secrets.token_urlsafe(32)
         now = time.time()
         self.sessions[token] = Session(
@@ -134,7 +131,6 @@ class SessionManager:
         return token
 
     def validate_session(self, token: str) -> Optional[str]:
-        """Validate session and return username if valid."""
         session = self.sessions.get(token)
         if session is None:
             return None
@@ -145,21 +141,8 @@ class SessionManager:
         return session.username
 
     def delete_session(self, token: str) -> None:
-        """Delete a session."""
         if token in self.sessions:
             del self.sessions[token]
-            self._save()
-
-    def cleanup_expired(self) -> None:
-        """Remove expired sessions."""
-        now = time.time()
-        expired = [
-            token for token, session in self.sessions.items()
-            if now > session.expires_at
-        ]
-        if expired:
-            for token in expired:
-                del self.sessions[token]
             self._save()
 
 
@@ -168,174 +151,44 @@ auth_config = AuthConfig()
 session_manager = SessionManager()
 
 
-# Login page HTML template
-LOGIN_PAGE_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CoPaw Login</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .login-container {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            width: 100%;
-            max-width: 400px;
-        }
-        .logo {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .logo h1 {
-            color: #333;
-            font-size: 28px;
-            margin-top: 10px;
-        }
-        .logo-icon {
-            font-size: 48px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #555;
-            font-weight: 500;
-        }
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        input[type="text"]:focus, input[type="password"]:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .error-message {
-            background: #fee;
-            color: #c00;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: none;
-        }
-        .login-btn {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .login-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        .login-btn:active {
-            transform: translateY(0);
-        }
-        .footer {
-            text-align: center;
-            margin-top: 20px;
-            color: #999;
-            font-size: 14px;
-        }
-    </style>
-</head>
-<body>
-    <div class="login-container">
-        <div class="logo">
-            <div class="logo-icon">🐾</div>
-            <h1>CoPaw</h1>
-        </div>
-        <div id="error" class="error-message"></div>
-        <form id="loginForm">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autocomplete="username">
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
-            </div>
-            <button type="submit" class="login-btn">Login</button>
-        </form>
-        <div class="footer">
-            Personal AI Assistant
-        </div>
-    </div>
-    <script>
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const errorDiv = document.getElementById('error');
-            errorDiv.style.display = 'none';
-
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-
-            try {
-                const response = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    window.location.href = '/';
-                } else {
-                    errorDiv.textContent = data.detail || 'Login failed';
-                    errorDiv.style.display = 'block';
-                }
-            } catch (err) {
-                errorDiv.textContent = 'Network error. Please try again.';
-                errorDiv.style.display = 'block';
-            }
-        });
-    </script>
-</body>
-</html>
-"""
+def _get_cookie_token(request: Request) -> Optional[str]:
+    return request.cookies.get("copaw_session")
 
 
-def get_session_token_from_request(request: Request) -> Optional[str]:
-    """Extract session token from request (cookie or header)."""
-    # Try cookie first
-    token = request.cookies.get("copaw_session")
-    if token:
-        return token
-    # Try Authorization header
+def _get_bearer_token(request: Request) -> Optional[str]:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:]
     return None
 
 
+def verify_supabase_jwt(token: str) -> Optional[str]:
+    """Validate Supabase JWT and return user_id (sub) if valid."""
+    secret = auth_config.supabase_jwt_secret
+    if not secret:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256", "HS384", "HS512"],
+            options={"verify_aud": False},
+        )
+        sub = payload.get("sub")
+        if not sub:
+            return None
+        return normalize_user_id(str(sub))
+    except JWTError:
+        return None
+
+
 def is_public_path(path: str) -> bool:
-    """Check if the path should be accessible without authentication."""
+    """Check if path should be accessible without authentication."""
     public_paths = {
         "/api/auth/login",
         "/api/auth/logout",
+        "/api/auth/status",
+        "/api/auth/supabase-config",
         "/api/version",
         "/logo.png",
         "/copaw-symbol.svg",
@@ -344,108 +197,151 @@ def is_public_path(path: str) -> bool:
         return True
     if path.startswith("/assets/"):
         return True
-    # Allow workspace file access for sharing
+    # Keep file share behavior unchanged.
     if path.startswith("/api/workspace/file/"):
         return True
     return False
 
 
+def resolve_authenticated_user(request: Request) -> tuple[Optional[str], Optional[str]]:
+    """Resolve authenticated user from cookie session or bearer token."""
+    # 1) Legacy cookie session.
+    cookie_token = _get_cookie_token(request)
+    if cookie_token:
+        username = session_manager.validate_session(cookie_token)
+        if username:
+            return DEFAULT_USER_ID, "legacy"
+
+    # 2) Authorization bearer.
+    bearer = _get_bearer_token(request)
+    if not bearer:
+        return None, None
+
+    supabase_user_id = verify_supabase_jwt(bearer)
+    if supabase_user_id:
+        return supabase_user_id, "supabase"
+
+    # Backward compatibility: legacy session token in Authorization header.
+    username = session_manager.validate_session(bearer)
+    if username:
+        return DEFAULT_USER_ID, "legacy"
+
+    return None, None
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Authentication middleware for protecting routes."""
+    """Authentication middleware for protecting API routes."""
 
     async def dispatch(self, request: Request, call_next):
-        # Skip if auth is disabled
         if not auth_config.enabled:
+            request.state.user_id = DEFAULT_USER_ID
+            request.state.auth_mode = "disabled"
             return await call_next(request)
 
         path = request.url.path
-
-        # Allow public paths
         if is_public_path(path):
             return await call_next(request)
 
-        # Check session
-        token = get_session_token_from_request(request)
-        if token:
-            username = session_manager.validate_session(token)
-            if username:
-                # Valid session, proceed
-                response = await call_next(request)
-                return response
+        user_id, auth_mode = resolve_authenticated_user(request)
+        if user_id:
+            request.state.user_id = user_id
+            request.state.auth_mode = auth_mode
+            return await call_next(request)
 
-        # Not authenticated
-        # For API requests, return 401
+        # APIs require auth; non-API pages are handled by SPA routing.
         if path.startswith("/api/"):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required"},
             )
-
-        # For page requests, show login page
-        return HTMLResponse(content=LOGIN_PAGE_HTML, status_code=200)
+        return await call_next(request)
 
 
 def setup_auth(app) -> None:
-    """Setup authentication routes and middleware.
-
-    Args:
-        app: FastAPI application instance
-    """
-    from fastapi import Body
+    """Setup authentication routes and middleware."""
+    from fastapi import Body, HTTPException
 
     @app.post("/api/auth/login")
     async def login(
         username: str = Body(...),
         password: str = Body(...),
     ):
-        """Login endpoint."""
         if not auth_config.enabled:
             return {"message": "Authentication is disabled"}
 
-        if username == auth_config.username and password == auth_config.password:
-            token = session_manager.create_session(
-                username=username,
-                expire_hours=auth_config.session_expire_hours,
-            )
-            response = JSONResponse(
-                content={"message": "Login successful", "username": username}
-            )
-            response.set_cookie(
-                key="copaw_session",
-                value=token,
-                httponly=True,
-                samesite="lax",
-                max_age=auth_config.session_expire_hours * 3600,
-            )
-            return response
-        else:
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid username or password"
-            )
+        if username != auth_config.username or password != auth_config.password:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+
+        token = session_manager.create_session(
+            username=username,
+            expire_hours=auth_config.session_expire_hours,
+        )
+        response = JSONResponse(
+            content={
+                "message": "Login successful",
+                "username": username,
+                "user_id": DEFAULT_USER_ID,
+                "auth_mode": "legacy",
+            },
+        )
+        response.set_cookie(
+            key="copaw_session",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            max_age=auth_config.session_expire_hours * 3600,
+        )
+        return response
 
     @app.post("/api/auth/logout")
     async def logout(request: Request):
-        """Logout endpoint."""
-        token = get_session_token_from_request(request)
-        if token:
-            session_manager.delete_session(token)
+        cookie_token = _get_cookie_token(request)
+        if cookie_token:
+            session_manager.delete_session(cookie_token)
+
+        bearer = _get_bearer_token(request)
+        if bearer:
+            session_manager.delete_session(bearer)
+
         response = JSONResponse(content={"message": "Logged out"})
         response.delete_cookie("copaw_session")
         return response
 
+    @app.get("/api/auth/supabase-config")
+    async def supabase_config():
+        if auth_config.supabase_url and auth_config.supabase_anon_key:
+            return {
+                "supabase_url": auth_config.supabase_url,
+                "supabase_anon_key": auth_config.supabase_anon_key,
+            }
+        return {
+            "supabase_url": None,
+            "supabase_anon_key": None,
+        }
+
     @app.get("/api/auth/status")
     async def auth_status(request: Request):
-        """Check authentication status."""
         if not auth_config.enabled:
-            return {"authenticated": True, "auth_enabled": False}
-        token = get_session_token_from_request(request)
-        if token:
-            username = session_manager.validate_session(token)
-            if username:
-                return {"authenticated": True, "username": username, "auth_enabled": True}
-        return {"authenticated": False, "auth_enabled": True}
+            return {
+                "authenticated": True,
+                "auth_enabled": False,
+                "user_id": DEFAULT_USER_ID,
+                "auth_mode": "disabled",
+            }
 
-    # Add middleware
+        user_id, auth_mode = resolve_authenticated_user(request)
+        if user_id:
+            return {
+                "authenticated": True,
+                "auth_enabled": True,
+                "user_id": user_id,
+                "auth_mode": auth_mode,
+            }
+        return {
+            "authenticated": False,
+            "auth_enabled": True,
+            "user_id": None,
+            "auth_mode": None,
+        }
+
     app.add_middleware(AuthMiddleware)

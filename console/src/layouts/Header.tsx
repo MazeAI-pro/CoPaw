@@ -6,8 +6,12 @@ import {
   BookOutlined,
   QuestionCircleOutlined,
   GithubOutlined,
+  LogoutOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Button, Tooltip } from "@agentscope-ai/design";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 import styles from "./index.module.less";
 
 const { Header: AntHeader } = Layout;
@@ -40,6 +44,8 @@ interface HeaderProps {
 
 export default function Header({ selectedKey }: HeaderProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
 
   const handleNavClick = (url: string) => {
     if (url) {
@@ -89,6 +95,20 @@ export default function Header({ selectedKey }: HeaderProps) {
             {t("header.github")}
           </Button>
         </Tooltip>
+        <span style={{ color: "#666", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <UserOutlined />
+          {user?.email || user?.id || "default"}
+        </span>
+        <Button
+          icon={<LogoutOutlined />}
+          type="text"
+          onClick={async () => {
+            await signOut();
+            navigate("/login", { replace: true });
+          }}
+        >
+          Logout
+        </Button>
         <LanguageSwitcher />
       </Space>
     </AntHeader>

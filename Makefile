@@ -8,6 +8,7 @@
 #   VOLUME     - Data volume name (default: copaw-data)
 #   SECRET_VOL - Secret volume name for providers.json and envs.json (default: copaw-secret)
 #   DOCKERFILE - Dockerfile path (default: deploy/Dockerfile.auth)
+#   ENV_FILE   - Environment file path (default: .env, optional)
 
 IMAGE      ?= copaw-auth
 CONTAINER  ?= copaw
@@ -15,6 +16,7 @@ PORT       ?= 8088
 VOLUME     ?= copaw-data
 SECRET_VOL ?= copaw-secret
 DOCKERFILE ?= deploy/Dockerfile.auth
+ENV_FILE   ?= .env
 
 .PHONY: build run stop restart logs ps shell clean update help
 
@@ -34,12 +36,23 @@ build:
 ## run: Start container in detached mode
 run:
 	@echo "Starting container: $(CONTAINER)"
-	docker run -d \
-		--name $(CONTAINER) \
-		-p $(PORT):8088 \
-		-v $(VOLUME):/app/working \
-		-v $(SECRET_VOL):/app/working.secret \
-		$(IMAGE)
+	@if [ -f "$(ENV_FILE)" ]; then \
+		echo "Using env file: $(ENV_FILE)"; \
+		docker run -d \
+			--name $(CONTAINER) \
+			-p $(PORT):8088 \
+			-v $(VOLUME):/app/working \
+			-v $(SECRET_VOL):/app/working.secret \
+			--env-file $(ENV_FILE) \
+			$(IMAGE); \
+	else \
+		docker run -d \
+			--name $(CONTAINER) \
+			-p $(PORT):8088 \
+			-v $(VOLUME):/app/working \
+			-v $(SECRET_VOL):/app/working.secret \
+			$(IMAGE); \
+	fi
 	@echo "Container started on port $(PORT)"
 	@echo "View logs: make logs"
 
@@ -79,11 +92,12 @@ clean: stop
 ## Convenience Commands
 ## ----------------------------------------------------------------------------
 
-## update: Pull latest dev-mtl branch, rebuild, and restart (full update cycle)
+## update: Pull current branch, rebuild, and restart (full update cycle)
 update:
-	@echo "Switching to dev-mtl branch..."
-	git checkout dev-mtl
-	git pull origin dev-mtl
+	@echo "Getting current branch..."
+	$(eval BRANCH := $(shell git rev-parse --abbrev-ref HEAD))
+	@echo "Current branch: $(BRANCH)"
+	git pull origin $(BRANCH)
 	@echo "Building image: $(IMAGE)"
 	docker build -t $(IMAGE) -f $(DOCKERFILE) .
 	@echo "Build complete: $(IMAGE)"
@@ -91,12 +105,23 @@ update:
 	-docker stop $(CONTAINER) 2>/dev/null || true
 	-docker rm $(CONTAINER) 2>/dev/null || true
 	@echo "Starting container: $(CONTAINER)"
-	docker run -d \
-		--name $(CONTAINER) \
-		-p $(PORT):8088 \
-		-v $(VOLUME):/app/working \
-		-v $(SECRET_VOL):/app/working.secret \
-		$(IMAGE)
+	@if [ -f "$(ENV_FILE)" ]; then \
+		echo "Using env file: $(ENV_FILE)"; \
+		docker run -d \
+			--name $(CONTAINER) \
+			-p $(PORT):8088 \
+			-v $(VOLUME):/app/working \
+			-v $(SECRET_VOL):/app/working.secret \
+			--env-file $(ENV_FILE) \
+			$(IMAGE); \
+	else \
+		docker run -d \
+			--name $(CONTAINER) \
+			-p $(PORT):8088 \
+			-v $(VOLUME):/app/working \
+			-v $(SECRET_VOL):/app/working.secret \
+			$(IMAGE); \
+	fi
 	@echo "Container started on port $(PORT)"
 	@echo "Update complete!"
 
@@ -119,9 +144,11 @@ help:
 	@echo "  VOLUME     = $(VOLUME)"
 	@echo "  SECRET_VOL = $(SECRET_VOL)"
 	@echo "  DOCKERFILE = $(DOCKERFILE)"
+	@echo "  ENV_FILE   = $(ENV_FILE)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build                # Build with defaults"
 	@echo "  make run PORT=3000        # Run on custom port"
 	@echo "  make update               # Full update cycle"
+	@echo "  make run ENV_FILE=deploy/.env  # Use custom env file"
 	@echo "  make clean                # Remove all artifacts"

@@ -37,6 +37,15 @@ def get_current_user_id(_request=None) -> str:
     return normalize_user_id(_CURRENT_USER_ID.get())
 
 
+def get_user_id_from_request(request) -> str:
+    """Resolve user id from request state first, then context var."""
+    if request is not None:
+        state = getattr(request, "state", None)
+        if state is not None and hasattr(state, "user_id"):
+            return normalize_user_id(getattr(state, "user_id"))
+    return get_current_user_id()
+
+
 def set_current_user_id(user_id: str | None):
     """Set current request-scoped user id context."""
     return _CURRENT_USER_ID.set(normalize_user_id(user_id))
