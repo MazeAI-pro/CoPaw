@@ -9,11 +9,12 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from jose import JWTError, jwt
+from jose import JWTError, jwk, jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from copaw.constant import WORKING_DIR
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 # Default credentials (hardcoded, can be overridden via env vars)
 DEFAULT_USERNAME = "copaw_admin"
 DEFAULT_PASSWORD = "Xk9#mP2$vL7@nQ4wR8tY"
+
+# JWKS cache for Supabase ES256 key verification
+_jwks_cache: dict[str, Any] = {"keys": None, "expires_at": 0}
 
 
 @dataclass
@@ -162,23 +166,106 @@ def _get_bearer_token(request: Request) -> Optional[str]:
     return None
 
 
-def verify_supabase_jwt(token: str) -> Optional[str]:
-    """Validate Supabase JWT and return user_id (sub) if valid."""
-    secret = auth_config.supabase_jwt_secret
-    if not secret:
+def get_supabase_jwks() -> Optional[list[dict[str, Any]]]:
+    """Fetch Supabase JWKS with caching.
+
+    Returns cached keys if available and not expired (1 hour cache).
+    """
+    global _jwks_cache
+
+    # Return cached keys if valid
+    if _jwks_cache["keys"] and _jwks_cache["expires_at"] > time.time():
+        return _jwks_cache["keys"]
+
+    url = auth_config.supabase_url
+    if not url:
         return None
+
+    jwks_url = f"{url}/auth/v1/jwks"
     try:
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256", "HS384", "HS512"],
-            options={"verify_aud": False},
-        )
-        sub = payload.get("sub")
-        if not sub:
-            return None
-        return normalize_user_id(str(sub))
-    except JWTError:
+        response = httpx.get(jwks_url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        keys = data.get("keys", [])
+        if keys:
+            _jwks_cache["keys"] = keys
+            _jwks_cache["expires_at"] = time.time() + 3600  # Cache for 1 hour
+            logger.debug("Successfully fetched %d JWKS keys from Supabase", len(keys))
+        return keys
+    except Exception as e:
+        logger.error("Failed to fetch JWKS from %s: %s", jwks_url, e)
+        return None
+
+
+def verify_supabase_jwt(token: str) -> Optional[str]:
+    """Validate Supabase JWT using JWKS for ES256 signature verification.
+
+    Supabase uses ES256 (ECDSA) algorithm for JWT signing. This function
+    fetches the public keys from Supabase's JWKS endpoint and verifies
+    the token signature.
+
+    Falls back to HMAC verification if JWKS fails and jwt_secret is configured.
+    """
+    try:
+        # Decode header to get kid and alg
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        alg = header.get("alg", "ES256")
+
+        if kid:
+            # Try JWKS verification for ES256 tokens
+            keys = get_supabase_jwks()
+            if keys:
+                for key in keys:
+                    if key.get("kid") == kid:
+                        try:
+                            public_key = jwk.construct(key)
+                            payload = jwt.decode(
+                                token,
+                                public_key,
+                                algorithms=[alg],
+                                options={"verify_aud": False},
+                            )
+                            sub = payload.get("sub")
+                            if sub:
+                                logger.debug(
+                                    "JWT verified via JWKS for user: %s",
+                                    sub[:8] + "..."
+                                )
+                                return normalize_user_id(str(sub))
+                        except JWTError as e:
+                            logger.warning("JWT verification failed with JWKS key: %s", e)
+                            continue
+                        except Exception as e:
+                            logger.warning("Unexpected error with JWKS key: %s", e)
+                            continue
+
+                logger.warning("No matching JWKS key found for kid: %s", kid)
+
+        # Fallback to HMAC verification if jwt_secret is configured
+        secret = auth_config.supabase_jwt_secret
+        if secret:
+            try:
+                payload = jwt.decode(
+                    token,
+                    secret,
+                    algorithms=["HS256", "HS384", "HS512"],
+                    options={"verify_aud": False},
+                )
+                sub = payload.get("sub")
+                if sub:
+                    logger.debug("JWT verified via HMAC secret for user: %s", sub[:8] + "...")
+                    return normalize_user_id(str(sub))
+            except JWTError:
+                pass
+
+        return None
+
+    except JWTError as e:
+        logger.warning("JWT validation failed: %s", str(e))
+        return None
+    except Exception as e:
+        logger.error("Unexpected error validating JWT: %s", str(e))
         return None
 
 
