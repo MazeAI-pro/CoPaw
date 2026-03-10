@@ -83,14 +83,18 @@ async def lifespan(
     # --- MCP client manager init (independent module, hot-reloadable) ---
     config = load_config()
     mcp_manager = MCPClientManager()
+    mcp_init_task: asyncio.Task | None = None
     if hasattr(config, "mcp"):
-        try:
-            await mcp_manager.init_from_config(config.mcp)
-            logger.debug("MCP client manager initialized")
-        except BaseException as e:
-            if isinstance(e, (KeyboardInterrupt, SystemExit)):
-                raise
-            logger.exception("Failed to initialize MCP manager")
+        async def _init_mcp_clients() -> None:
+            try:
+                await mcp_manager.init_from_config(config.mcp)
+                logger.debug("MCP client manager initialized")
+            except BaseException as e:
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.exception("Failed to initialize MCP manager")
+
+        mcp_init_task = asyncio.create_task(_init_mcp_clients())
     runner.set_mcp_manager(mcp_manager)
 
     # --- channel connector init/start (from config.json) ---
@@ -401,6 +405,17 @@ async def lifespan(
     try:
         yield
     finally:
+        if mcp_init_task is not None and not mcp_init_task.done():
+            mcp_init_task.cancel()
+            try:
+                await mcp_init_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.debug(
+                    "Error while cancelling MCP init task during shutdown",
+                    exc_info=True,
+                )
         # Stop current app.state refs (post-restart instances if any)
         cfg_w = getattr(app.state, "config_watcher", None)
         mcp_w = getattr(app.state, "mcp_watcher", None)
