@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from ...constant import USER_FILES_DIR
+from ...app.user_scope import get_current_user_id, get_user_workspace_dir
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ async def download_file_from_base64(
         base64_data: Base64-encoded file content.
         filename: The filename to save. If not provided, will generate one.
         download_dir: The directory to save files. If not provided, defaults
-            to USER_FILES_DIR.
+            to current user's workspace directory.
 
     Returns:
         The local file path.
@@ -166,8 +166,9 @@ async def download_file_from_base64(
         file_content = base64.b64decode(base64_data)
 
         if download_dir is None:
-            download_dir = str(USER_FILES_DIR)
-            USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
+            workspace_dir = get_user_workspace_dir(get_current_user_id())
+            download_dir = str(workspace_dir)
+            workspace_dir.mkdir(parents=True, exist_ok=True)
 
         download_path = Path(download_dir)
         download_path.mkdir(parents=True, exist_ok=True)
@@ -204,7 +205,7 @@ async def download_file_from_url(
             generate a hash-based name.
         download_dir (`str`, optional):
             The directory to save files. If not provided, defaults to
-            USER_FILES_DIR.
+            current user's workspace directory.
 
     Returns:
         `str`:
@@ -217,8 +218,9 @@ async def download_file_from_url(
             return local
 
         if download_dir is None:
-            download_dir = str(USER_FILES_DIR)
-            USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
+            workspace_dir = get_user_workspace_dir(get_current_user_id())
+            download_dir = str(workspace_dir)
+            workspace_dir.mkdir(parents=True, exist_ok=True)
 
         download_path = Path(download_dir)
         download_path.mkdir(parents=True, exist_ok=True)

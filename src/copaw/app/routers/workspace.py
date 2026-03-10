@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Workspace API – download / upload the entire WORKING_DIR as a zip."""
+"""Workspace API – operate within current user's workspace directory."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse, FileResponse
 
-from ...constant import WORKING_DIR
+from ..user_scope import get_current_user_id, get_user_workspace_dir
 
 # Initialize mimetypes
 mimetypes.init()
@@ -97,7 +97,7 @@ def _zip_directory(root: Path) -> io.BytesIO:
 # ---------------------------------------------------------------------------
 
 
-def _validate_zip_data(data: bytes) -> None:
+def _validate_zip_data(data: bytes, root: Path) -> None:
     """Ensure *data* is a valid zip without path-traversal entries."""
     if not zipfile.is_zipfile(io.BytesIO(data)):
         raise HTTPException(
@@ -106,8 +106,8 @@ def _validate_zip_data(data: bytes) -> None:
         )
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for name in zf.namelist():
-            resolved = (WORKING_DIR / name).resolve()
-            if not str(resolved).startswith(str(WORKING_DIR)):
+            resolved = (root / name).resolve()
+            if not str(resolved).startswith(str(root)):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Zip contains unsafe path: {name}",
@@ -123,25 +123,26 @@ def _validate_zip_data(data: bytes) -> None:
     "/download",
     summary="Download workspace as zip",
     description=(
-        "Package the entire WORKING_DIR into a zip archive and stream it "
+        "Package current user workspace into a zip archive and stream it "
         "back as a downloadable file."
     ),
     responses={
         200: {
             "content": {"application/zip": {}},
-            "description": "Zip archive of WORKING_DIR",
+            "description": "Zip archive of user workspace",
         },
     },
 )
 async def download_workspace():
-    """Stream WORKING_DIR as a zip file."""
-    if not WORKING_DIR.is_dir():
+    """Stream current user's workspace directory as a zip file."""
+    workspace_root = get_user_workspace_dir(get_current_user_id())
+    if not workspace_root.is_dir():
         raise HTTPException(
             status_code=404,
-            detail=f"WORKING_DIR does not exist: {WORKING_DIR}",
+            detail=f"Workspace does not exist: {workspace_root}",
         )
 
-    buf = _zip_directory(WORKING_DIR)
+    buf = _zip_directory(workspace_root)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"copaw_workspace_{timestamp}.zip"
@@ -161,19 +162,20 @@ async def download_workspace():
     summary="Upload zip and merge into workspace",
     description=(
         "Upload a zip archive.  Paths present in the zip are merged into "
-        "WORKING_DIR (files overwritten, dirs merged).  Paths not in the zip "
-        "are left unchanged (e.g. copaw.db, runtime dirs).  Download packs "
-        "the entire WORKING_DIR; upload only overwrites/merges zip contents."
+        "the current user workspace (files overwritten, dirs merged). "
+        "Paths not in the zip are left unchanged. Download packs the entire "
+        "user workspace; upload only overwrites/merges zip contents."
     ),
 )
 async def upload_workspace(  # pylint: disable=too-many-branches
+    request: Request,
     file: UploadFile = File(
         ...,
-        description="Zip archive to merge into WORKING_DIR",
+        description="Zip archive to merge into current user workspace",
     ),
 ) -> dict:
     """
-    Merge uploaded zip contents into WORKING_DIR (overwrite, do not clear).
+    Merge uploaded zip contents into user workspace (overwrite, do not clear).
     """
 
     # --- validate uploaded file ---
@@ -189,8 +191,9 @@ async def upload_workspace(  # pylint: disable=too-many-branches
             ),
         )
 
+    workspace_root = get_user_workspace_dir(get_current_user_id(request))
     data = await file.read()
-    _validate_zip_data(data)
+    _validate_zip_data(data, workspace_root)
 
     tmp_dir = None
     try:
@@ -204,11 +207,11 @@ async def upload_workspace(  # pylint: disable=too-many-branches
         if len(top_entries) == 1 and top_entries[0].is_dir():
             extract_root = top_entries[0]
 
-        WORKING_DIR.mkdir(parents=True, exist_ok=True)
+        workspace_root.mkdir(parents=True, exist_ok=True)
 
         # Merge: overwrite paths present in zip; leave others untouched
         for item in extract_root.iterdir():
-            dest = WORKING_DIR / item.name
+            dest = workspace_root / item.name
             if item.is_file():
                 shutil.copy2(item, dest)
             else:
@@ -236,8 +239,8 @@ async def upload_workspace(  # pylint: disable=too-many-branches
     "/file/{file_path:path}",
     summary="Get a file from workspace",
     description=(
-        "Get a single file from WORKING_DIR. "
-        "Only files within WORKING_DIR are accessible for security. "
+        "Get a single file from current user workspace. "
+        "Only files within user workspace are accessible for security. "
         "Previewable files (HTML, PDF, images, text) are displayed inline; "
         "others are downloaded."
     ),
@@ -250,22 +253,23 @@ async def upload_workspace(  # pylint: disable=too-many-branches
         404: {"description": "File not found"},
     },
 )
-async def download_file(file_path: str):
+async def download_file(file_path: str, request: Request):
     """Get a single file from the workspace.
 
     Args:
-        file_path: Relative path to the file within WORKING_DIR
+        file_path: Relative path to the file within current user workspace
 
     Returns:
         FileResponse with the file content.
         Previewable files (HTML, PDF, images, text) are displayed inline;
         others trigger a download.
     """
+    workspace_root = get_user_workspace_dir(get_current_user_id(request))
     # Resolve the full path
-    full_path = (WORKING_DIR / file_path).resolve()
+    full_path = (workspace_root / file_path).resolve()
 
-    # Security check: ensure the path is within WORKING_DIR
-    if not str(full_path).startswith(str(WORKING_DIR)):
+    # Security check: ensure the path is within workspace root
+    if not str(full_path).startswith(str(workspace_root)):
         raise HTTPException(
             status_code=403,
             detail="Access denied: path is outside the workspace",

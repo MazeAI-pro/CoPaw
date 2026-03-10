@@ -18,17 +18,15 @@ from ..config import (  # pylint: disable=no-name-in-module
     update_last_dispatch,
     ConfigWatcher,
 )
-from ..config.utils import get_jobs_path, get_chats_path, get_config_path
+from ..config.utils import get_jobs_path, get_config_path
 from ..constant import DOCS_ENABLED, LOG_LEVEL_ENV, CORS_ORIGINS, WORKING_DIR
 from ..__version__ import __version__
 from ..utils.logging import setup_logger, add_copaw_file_handler
 from .channels import ChannelManager  # pylint: disable=no-name-in-module
 from .channels.utils import make_process_from_runner
 from .mcp import MCPClientManager, MCPConfigWatcher  # MCP hot-reload support
-from .runner.repo.json_repo import JsonChatRepository
 from .crons.repo.json_repo import JsonJobRepository
 from .crons.manager import CronManager
-from .runner.manager import ChatManager
 from .routers import router as api_router
 from .routers.voice import voice_router
 from ..envs import load_envs_into_environ
@@ -113,14 +111,6 @@ async def lifespan(
     )
     await cron_manager.start()
 
-    # --- chat manager init and connect to runner.session ---
-    chat_repo = JsonChatRepository(get_chats_path())
-    chat_manager = ChatManager(
-        repo=chat_repo,
-    )
-
-    runner.set_chat_manager(chat_manager)
-
     # --- config file watcher (channels + heartbeat hot-reload on change) ---
     config_watcher = ConfigWatcher(
         channel_manager=channel_manager,
@@ -148,7 +138,7 @@ async def lifespan(
     app.state.runner = runner
     app.state.channel_manager = channel_manager
     app.state.cron_manager = cron_manager
-    app.state.chat_manager = chat_manager
+    app.state.chat_manager = None
     app.state.config_watcher = config_watcher
     app.state.mcp_manager = mcp_manager
     app.state.mcp_watcher = mcp_watcher

@@ -15,13 +15,14 @@ from .models import (
     ChatHistory,
 )
 from .utils import agentscope_msg_to_message
+from ..user_scope import get_current_user_id
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
 
 def get_chat_manager(request: Request) -> ChatManager:
-    """Get the chat manager from app state.
+    """Get user-scoped chat manager from runner.
 
     Args:
         request: FastAPI request object
@@ -32,13 +33,13 @@ def get_chat_manager(request: Request) -> ChatManager:
     Raises:
         HTTPException: If manager is not initialized
     """
-    mgr = getattr(request.app.state, "chat_manager", None)
-    if mgr is None:
+    runner = getattr(request.app.state, "runner", None)
+    if runner is None:
         raise HTTPException(
             status_code=503,
             detail="Chat manager not initialized",
         )
-    return mgr
+    return runner.get_chat_manager_for_user(get_current_user_id(request))
 
 
 def get_session(request: Request) -> JSONSession:
@@ -59,7 +60,7 @@ def get_session(request: Request) -> JSONSession:
             status_code=503,
             detail="Session not initialized",
         )
-    return runner.session
+    return runner.get_session_for_user(get_current_user_id(request))
 
 
 @router.get("", response_model=list[ChatSpec])
@@ -81,6 +82,7 @@ async def list_chats(
 @router.post("", response_model=ChatSpec)
 async def create_chat(
     request: ChatSpec,
+    raw_request: Request,
     mgr: ChatManager = Depends(get_chat_manager),
 ):
     """Create a new chat.
@@ -94,12 +96,13 @@ async def create_chat(
     Returns:
         Created chat spec with UUID
     """
+    current_user_id = get_current_user_id(raw_request)
     chat_id = str(uuid4())
     spec = ChatSpec(
         id=chat_id,
         name=request.name,
         session_id=request.session_id,
-        user_id=request.user_id,
+        user_id=current_user_id,
         channel=request.channel,
         meta=request.meta,
     )

@@ -13,6 +13,7 @@ from agentscope.message import (
     VideoBlock,
 )
 
+from ...app.user_scope import get_current_user_id, get_user_workspace_dir
 from ...constant import WORKING_DIR, get_copaw_base_url
 from ..schema import FileBlock
 
@@ -80,13 +81,22 @@ async def send_file_to_user(
         absolute_path = os.path.abspath(file_path)
         resolved_path = Path(absolute_path).resolve()
 
-        # Check if file is within WORKING_DIR
-        if str(resolved_path).startswith(str(WORKING_DIR)):
-            # Generate HTTP URL for cloud deployment
-            relative_path = resolved_path.relative_to(WORKING_DIR)
+        user_workspace = get_user_workspace_dir(get_current_user_id()).resolve()
+        # Check if file is within current user's workspace
+        if str(resolved_path).startswith(str(user_workspace)):
+            # Generate HTTP URL for user workspace file.
+            relative_path = resolved_path.relative_to(user_workspace)
             relative_url = f"/api/workspace/file/{relative_path.as_posix()}"
             # Use full URL if COPAW_BASE_URL is set (read at call time
             # to pick up Console-configured env vars)
+            base_url = get_copaw_base_url()
+            file_url = (
+                f"{base_url}{relative_url}" if base_url else relative_url
+            )
+        elif str(resolved_path).startswith(str(WORKING_DIR)):
+            # Backward-compatible fallback for legacy paths under WORKING_DIR.
+            relative_path = resolved_path.relative_to(WORKING_DIR)
+            relative_url = f"/api/workspace/file/{relative_path.as_posix()}"
             base_url = get_copaw_base_url()
             file_url = (
                 f"{base_url}{relative_url}" if base_url else relative_url

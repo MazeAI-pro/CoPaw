@@ -21,16 +21,25 @@ from .session import SafeJSONSession
 from .utils import build_env_context
 from ...utils.tracing import create_trace, flush as langfuse_flush
 from ..channels.schema import DEFAULT_CHANNEL
+from ..user_scope import (
+    DEFAULT_USER_ID,
+    get_user_chats_path,
+    get_user_root,
+    get_user_sessions_dir,
+    migrate_legacy_to_user_dir,
+    normalize_user_id,
+    reset_current_user_id,
+    set_current_user_id,
+)
+from .manager import ChatManager
+from .repo.json_repo import JsonChatRepository
 from ...agents.memory import MemoryManager
 from ...agents.model_factory import create_model_and_formatter
 from ...agents.react_agent import CoPawAgent
 from ...agents.tools import read_file, write_file, edit_file
 from ...agents.utils.token_counting import _get_token_counter
 from ...config import load_config
-from ...constant import (
-    MEMORY_COMPACT_RATIO,
-    WORKING_DIR,
-)
+from ...constant import MEMORY_COMPACT_RATIO
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +48,93 @@ class AgentRunner(Runner):
     def __init__(self) -> None:
         super().__init__()
         self.framework_type = "agentscope"
-        self._chat_manager = None  # Store chat_manager reference
+        self._chat_manager_by_user: dict[str, ChatManager] = {}
+        self._session_by_user: dict[str, SafeJSONSession] = {}
+        self._memory_manager_by_user: dict[str, MemoryManager] = {}
+        self._memory_manager_lock = asyncio.Lock()
         self._mcp_manager = None  # MCP client manager for hot-reload
+        self._shared_chat_model = None
+        self._shared_formatter = None
+        self._shared_token_counter = None
+        self._shared_toolkit: Toolkit | None = None
         self.memory_manager: MemoryManager | None = None
+        self.session: SafeJSONSession | None = None
 
     def set_chat_manager(self, chat_manager):
-        """Set chat manager for auto-registration.
+        """Compatibility shim; chat managers are user-scoped now."""
+        del chat_manager
 
-        Args:
-            chat_manager: ChatManager instance
-        """
-        self._chat_manager = chat_manager
+    def get_chat_manager_for_user(self, user_id: str | None) -> ChatManager:
+        uid = normalize_user_id(user_id)
+        manager = self._chat_manager_by_user.get(uid)
+        if manager is None:
+            manager = ChatManager(
+                repo=JsonChatRepository(get_user_chats_path(uid)),
+            )
+            self._chat_manager_by_user[uid] = manager
+        return manager
+
+    def get_session_for_user(self, user_id: str | None) -> SafeJSONSession:
+        uid = normalize_user_id(user_id)
+        session_store = self._session_by_user.get(uid)
+        if session_store is None:
+            session_store = SafeJSONSession(
+                save_dir=str(get_user_sessions_dir(uid)),
+            )
+            self._session_by_user[uid] = session_store
+            if uid == DEFAULT_USER_ID:
+                # Keep legacy attribute for compatibility.
+                self.session = session_store
+        return session_store
+
+    async def get_or_create_memory_manager(
+        self,
+        user_id: str | None,
+    ) -> MemoryManager:
+        uid = normalize_user_id(user_id)
+        existing = self._memory_manager_by_user.get(uid)
+        if existing is not None:
+            return existing
+
+        async with self._memory_manager_lock:
+            existing = self._memory_manager_by_user.get(uid)
+            if existing is not None:
+                return existing
+
+            if (
+                self._shared_chat_model is None
+                or self._shared_formatter is None
+                or self._shared_token_counter is None
+                or self._shared_toolkit is None
+            ):
+                # init_handler should populate shared resources first.
+                chat_model, formatter = create_model_and_formatter()
+                token_counter = _get_token_counter()
+                toolkit = Toolkit()
+                toolkit.register_tool_function(read_file)
+                toolkit.register_tool_function(write_file)
+                toolkit.register_tool_function(edit_file)
+                self._shared_chat_model = chat_model
+                self._shared_formatter = formatter
+                self._shared_token_counter = token_counter
+                self._shared_toolkit = toolkit
+
+            config = load_config()
+            memory_manager = MemoryManager(
+                working_dir=str(get_user_root(uid)),
+                chat_model=self._shared_chat_model,
+                formatter=self._shared_formatter,
+                token_counter=self._shared_token_counter,
+                toolkit=self._shared_toolkit,
+                max_input_length=config.agents.running.max_input_length,
+                memory_compact_ratio=MEMORY_COMPACT_RATIO,
+            )
+            await memory_manager.start()
+            self._memory_manager_by_user[uid] = memory_manager
+            if uid == DEFAULT_USER_ID:
+                # Keep legacy attribute for compatibility.
+                self.memory_manager = memory_manager
+            return memory_manager
 
     def set_mcp_manager(self, mcp_manager):
         """Set MCP client manager for hot-reload support.
@@ -71,6 +156,11 @@ class AgentRunner(Runner):
         # Command path: do not create agent; yield from run_command_path
         query = _get_last_user_text(msgs)
         if query and _is_command(query):
+            req_user_id = normalize_user_id(getattr(request, "user_id", DEFAULT_USER_ID))
+            self.session = self.get_session_for_user(req_user_id)
+            self.memory_manager = await self.get_or_create_memory_manager(
+                req_user_id,
+            )
             logger.info("Command path: %s", query.strip()[:50])
             async for msg, last in run_command_path(request, msgs, self):
                 yield msg, last
@@ -79,10 +169,18 @@ class AgentRunner(Runner):
         agent = None
         chat = None
         session_state_loaded = False
+        user_ctx_token = None
+        session_id = ""
+        user_id = DEFAULT_USER_ID
         try:
             session_id = request.session_id
-            user_id = request.user_id
+            user_id = normalize_user_id(request.user_id)
+            user_ctx_token = set_current_user_id(user_id)
             channel = getattr(request, "channel", DEFAULT_CHANNEL)
+            user_root = get_user_root(user_id)
+            session_store = self.get_session_for_user(user_id)
+            chat_manager = self.get_chat_manager_for_user(user_id)
+            memory_manager = await self.get_or_create_memory_manager(user_id)
 
             logger.info(
                 "Handle agent query:\n%s",
@@ -109,7 +207,7 @@ class AgentRunner(Runner):
                 session_id=session_id,
                 user_id=user_id,
                 channel=channel,
-                working_dir=str(WORKING_DIR),
+                working_dir=str(user_root),
             )
 
             # Get MCP clients from manager (hot-reloadable)
@@ -124,7 +222,7 @@ class AgentRunner(Runner):
             agent = CoPawAgent(
                 env_context=env_context,
                 mcp_clients=mcp_clients,
-                memory_manager=self.memory_manager,
+                memory_manager=memory_manager,
                 max_iters=max_iters,
                 max_input_length=max_input_length,
             )
@@ -143,16 +241,15 @@ class AgentRunner(Runner):
                 else:
                     name = "Media Message"
 
-            if self._chat_manager is not None:
-                chat = await self._chat_manager.get_or_create_chat(
-                    session_id,
-                    user_id,
-                    channel,
-                    name=name,
-                )
+            chat = await chat_manager.get_or_create_chat(
+                session_id,
+                user_id,
+                channel,
+                name=name,
+            )
 
             try:
-                await self.session.load_session_state(
+                await session_store.load_session_state(
                     session_id=session_id,
                     user_id=user_id,
                     agent=agent,
@@ -206,14 +303,20 @@ class AgentRunner(Runner):
             langfuse_flush()
 
             if agent is not None and session_state_loaded:
-                await self.session.save_session_state(
+                session_store = self.get_session_for_user(
+                    normalize_user_id(getattr(request, "user_id", DEFAULT_USER_ID)),
+                )
+                await session_store.save_session_state(
                     session_id=session_id,
                     user_id=user_id,
                     agent=agent,
                 )
 
-            if self._chat_manager is not None and chat is not None:
-                await self._chat_manager.update_chat(chat)
+            if chat is not None:
+                chat_manager = self.get_chat_manager_for_user(user_id)
+                await chat_manager.update_chat(chat)
+            if user_ctx_token is not None:
+                reset_current_user_id(user_ctx_token)
 
     async def init_handler(self, *args, **kwargs):
         """
@@ -230,38 +333,24 @@ class AgentRunner(Runner):
                 "using existing environment variables",
             )
 
-        session_dir = str(WORKING_DIR / "sessions")
-        self.session = SafeJSONSession(save_dir=session_dir)
-
+        migrate_legacy_to_user_dir(DEFAULT_USER_ID)
         try:
-            if self.memory_manager is None:
-                # Get config for memory manager
-                config = load_config()
-                max_input_length = config.agents.running.max_input_length
-
-                # Create model and formatter
-                chat_model, formatter = create_model_and_formatter()
-
-                # Get token counter
-                token_counter = _get_token_counter()
-
-                # Create toolkit for memory manager
-                toolkit = Toolkit()
-                toolkit.register_tool_function(read_file)
-                toolkit.register_tool_function(write_file)
-                toolkit.register_tool_function(edit_file)
-
-                # Initialize MemoryManager with new parameters
-                self.memory_manager = MemoryManager(
-                    working_dir=str(WORKING_DIR),
-                    chat_model=chat_model,
-                    formatter=formatter,
-                    token_counter=token_counter,
-                    toolkit=toolkit,
-                    max_input_length=max_input_length,
-                    memory_compact_ratio=MEMORY_COMPACT_RATIO,
-                )
-            await self.memory_manager.start()
+            # Shared resources for user-scoped MemoryManager instances.
+            chat_model, formatter = create_model_and_formatter()
+            token_counter = _get_token_counter()
+            toolkit = Toolkit()
+            toolkit.register_tool_function(read_file)
+            toolkit.register_tool_function(write_file)
+            toolkit.register_tool_function(edit_file)
+            self._shared_chat_model = chat_model
+            self._shared_formatter = formatter
+            self._shared_token_counter = token_counter
+            self._shared_toolkit = toolkit
+            # Pre-warm default user stores for backward compatibility.
+            self.session = self.get_session_for_user(DEFAULT_USER_ID)
+            self.memory_manager = await self.get_or_create_memory_manager(
+                DEFAULT_USER_ID,
+            )
         except Exception as e:
             logger.exception(f"MemoryManager start failed: {e}")
 
@@ -269,7 +358,12 @@ class AgentRunner(Runner):
         """
         Shutdown handler.
         """
-        try:
-            await self.memory_manager.close()
-        except Exception as e:
-            logger.warning(f"MemoryManager stop failed: {e}")
+        for uid, manager in list(self._memory_manager_by_user.items()):
+            try:
+                await manager.close()
+            except Exception as e:
+                logger.warning(
+                    "MemoryManager stop failed for user %s: %s",
+                    uid,
+                    e,
+                )

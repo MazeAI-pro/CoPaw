@@ -10,7 +10,7 @@ from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from ...constant import WORKING_DIR
+from ...app.user_scope import get_current_user_id, get_user_workspace_dir
 from .file_io import _resolve_file_path
 
 # Skip binary / large files
@@ -87,13 +87,13 @@ async def grep_search(  # pylint: disable=too-many-branches
     context_lines: int = 0,
 ) -> ToolResponse:
     """Search file contents by pattern, recursively. Relative paths resolve
-    from WORKING_DIR. Output format: ``path:line_number: content``.
+    from current user's workspace. Output format: ``path:line_number: content``.
 
     Args:
         pattern (`str`):
             Search string (or regex when is_regex=True).
         path (`str`, optional):
-            File or directory to search in. Defaults to WORKING_DIR.
+            File or directory to search in. Defaults to workspace root.
         is_regex (`bool`, optional):
             Treat pattern as a regular expression. Defaults to False.
         case_sensitive (`bool`, optional):
@@ -112,7 +112,11 @@ async def grep_search(  # pylint: disable=too-many-branches
             ],
         )
 
-    search_root = Path(_resolve_file_path(path)) if path else WORKING_DIR
+    search_root = (
+        Path(_resolve_file_path(path))
+        if path
+        else get_user_workspace_dir(get_current_user_id())
+    )
 
     if not search_root.exists():
         return ToolResponse(
@@ -218,13 +222,13 @@ async def glob_search(
     path: Optional[str] = None,
 ) -> ToolResponse:
     """Find files matching a glob pattern (e.g. ``"*.py"``, ``"**/*.json"``).
-    Relative paths resolve from WORKING_DIR.
+    Relative paths resolve from current user's workspace.
 
     Args:
         pattern (`str`):
             Glob pattern to match.
         path (`str`, optional):
-            Root directory to search from. Defaults to WORKING_DIR.
+            Root directory to search from. Defaults to workspace root.
     """
     if not pattern:
         return ToolResponse(
@@ -236,7 +240,11 @@ async def glob_search(
             ],
         )
 
-    search_root = Path(_resolve_file_path(path)) if path else WORKING_DIR
+    search_root = (
+        Path(_resolve_file_path(path))
+        if path
+        else get_user_workspace_dir(get_current_user_id())
+    )
 
     if not search_root.exists():
         return ToolResponse(

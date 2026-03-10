@@ -38,6 +38,7 @@ from .tools import (
     create_memory_search_tool,
 )
 from .utils import process_file_and_media_blocks_in_message
+from ..app.user_scope import get_current_user_id, get_user_profile_path
 from ..agents.memory import MemoryManager
 from ..config import load_config
 from ..constant import (
@@ -235,6 +236,21 @@ class CoPawAgent(ReActAgent):
             Complete system prompt string
         """
         sys_prompt = build_system_prompt_from_working_dir()
+        user_profile_path = get_user_profile_path(get_current_user_id())
+        if user_profile_path.exists():
+            try:
+                profile_content = user_profile_path.read_text(
+                    encoding="utf-8",
+                ).strip()
+                if profile_content:
+                    sys_prompt = (
+                        f"{sys_prompt}\n\n# PROFILE.md\n\n{profile_content}"
+                    )
+            except OSError:
+                logger.debug(
+                    "Failed to read user profile from %s",
+                    user_profile_path,
+                )
         if self._env_context is not None:
             sys_prompt = self._env_context + "\n\n" + sys_prompt
         return sys_prompt
