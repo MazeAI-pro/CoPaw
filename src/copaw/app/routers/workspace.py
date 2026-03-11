@@ -14,7 +14,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse, FileResponse
 
-from ..user_scope import get_user_id_from_request, get_user_workspace_dir
+from ..user_scope import (
+    get_user_id_from_request,
+    normalize_user_id,
+    get_user_root,
+    get_user_workspace_dir,
+)
 
 # Initialize mimetypes
 mimetypes.init()
@@ -264,16 +269,33 @@ async def download_file(file_path: str, request: Request):
         Previewable files (HTML, PDF, images, text) are displayed inline;
         others trigger a download.
     """
-    workspace_root = get_user_workspace_dir(get_user_id_from_request(request))
-    # Resolve the full path
-    full_path = (workspace_root / file_path).resolve()
+    user_id = get_user_id_from_request(request)
+    if file_path.startswith("u/"):
+        parts = file_path.split("/", 2)
+        if len(parts) < 3 or not parts[2]:
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {file_path}",
+            )
+        user_id = normalize_user_id(parts[1])
+        file_path = parts[2]
+    user_root = get_user_root(user_id).resolve()
+    workspace_root = get_user_workspace_dir(user_id).resolve()
+    # Resolve the full path under current user root first.
+    full_path = (user_root / file_path).resolve()
 
-    # Security check: ensure the path is within workspace root
-    if not str(full_path).startswith(str(workspace_root)):
+    # Security check: ensure the path is within user root
+    if not str(full_path).startswith(str(user_root)):
         raise HTTPException(
             status_code=403,
-            detail="Access denied: path is outside the workspace",
+            detail="Access denied: path is outside the user root",
         )
+
+    # Backward-compatible fallback: try workspace root for older URLs.
+    if not full_path.exists():
+        workspace_path = (workspace_root / file_path).resolve()
+        if str(workspace_path).startswith(str(workspace_root)) and workspace_path.exists():
+            full_path = workspace_path
 
     # Check if file exists and is a file
     if not full_path.exists():
